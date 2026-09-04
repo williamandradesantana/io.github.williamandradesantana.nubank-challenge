@@ -1,7 +1,9 @@
 package io.github.williamandradesantana.nubank_challenge.controllers;
 
+import io.github.williamandradesantana.nubank_challenge.documentation.annotations.ApiController;
 import io.github.williamandradesantana.nubank_challenge.dtos.contact.ContactRequest;
 import io.github.williamandradesantana.nubank_challenge.services.ContactService;
+import io.swagger.v3.oas.annotations.Operation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -14,11 +16,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/contatos")
 @RequiredArgsConstructor
+@ApiController(tagName = "Contatos", tagDescription = "Gerenciamento de contatos")
 public class ContactController {
 
     private final ContactService contactService;
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Cria um contato, vinculado há um cliente")
     public ResponseEntity<Void> createContact(@RequestBody ContactRequest request) {
         contactService.createContact(request);
         return ResponseEntity.status(HttpStatus.CREATED).build();
