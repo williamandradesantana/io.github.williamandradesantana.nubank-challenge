@@ -18,7 +18,7 @@ spring:
 
   output:
     ansi:
-      enabled: ${OUTPUT_ANSI_ENABLED}
+      enabled: ${OUTPUT_ANSI_ENABLED:ALWAYS}
 
   main:
     banner-mode: OFF
