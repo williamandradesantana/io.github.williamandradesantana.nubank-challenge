@@ -15,6 +15,7 @@ API REST para cadastro de **clientes** e seus **contatos** (telefones), desenvol
 - **Testcontainers** (testes de integração)
 - **Maven**
 - **GitHub Actions** (CI)
+- **Terraform** + **Neon** (banco Postgres gerenciado em produção, provisionado como código)
 
 ## Arquitetura
 
@@ -42,9 +43,11 @@ exceptions/   → exceções de negócio + handler global
 ### Pré-requisitos
 
 - Java 21
-- Docker (para o Postgres via `docker-compose`, e para o Testcontainers rodar os testes)
+- Docker (necessário para o Postgres local via `docker-compose`, **e** para o Testcontainers rodar os testes de integração, independente da opção de banco escolhida abaixo)
 
-### 1. Subir o banco
+Existem duas formas de ter um banco disponível: Postgres local via Docker (bom para desenvolvimento do dia a dia) ou o banco Neon já provisionado em produção via Terraform (ver seção [Infraestrutura (Terraform + Neon)](#infraestrutura-terraform--neon)). Escolha uma das opções abaixo antes de rodar a aplicação.
+
+#### Opção A — Postgres local via Docker
 
 Crie um `.env` na raiz (baseado no `.env.example`, se houver) com:
 
@@ -61,11 +64,42 @@ OUTPUT_ANSI_ENABLED=ALWAYS
 docker compose --env-file .env up -d
 ```
 
-### 2. Rodar a aplicação
+#### Opção B — Banco Neon (produção)
 
+Preencha o `.env` com os dados do banco provisionado via Terraform (veja como obter esses valores na seção [Infraestrutura](#infraestrutura-terraform--neon)):
+
+```env
+POSTGRES_HOST=ep-xxx-xxx.sa-east-1.aws.neon.tech
+POSTGRES_PORT=5432
+POSTGRES_DB=nubank_db
+POSTGRES_USER=nubank_app
+POSTGRES_PASSWORD=<sua-senha>
+OUTPUT_ANSI_ENABLED=ALWAYS
+```
+
+> Conexões com a Neon exigem SSL — por isso a `datasource.url` no `application.yaml` já inclui `?sslmode=require`. Não é necessário nenhum passo extra além de preencher o `.env` corretamente.
+
+Nessa opção não é preciso rodar `docker compose up`, já que o banco não é local.
+
+### 2. Carregar as variáveis do `.env`
+
+**Linux/macOS:**
 ```bash
 export $(cat .env | xargs) && ./mvnw spring-boot:run
 ```
+
+**Windows (PowerShell):**
+```powershell
+Get-Content .env | ForEach-Object {
+    if ($_ -match '^\s*([^#][^=]*)=(.*)$') {
+        [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim())
+    }
+}
+
+.\mvnw.cmd spring-boot:run
+```
+
+Alternativamente, em qualquer SO, dá pra configurar as variáveis direto na IDE (IntelliJ: *Run/Debug Configurations → Environment variables*) em vez de usar o `.env`.
 
 A API sobe em `http://localhost:8080`.
 
@@ -137,18 +171,62 @@ Todas as exceções de negócio retornam o mesmo formato, via `GlobalExceptionHa
 - `phone` obrigatório, entre 1 e 20 caracteres, único no sistema.
 - `clientId` obrigatório e deve corresponder a um cliente existente.
 
+## Infraestrutura (Terraform + Neon)
+
+O banco de produção é [Neon](https://neon.tech) (Postgres serverless gerenciado), provisionado como código em `terraform/` via o provider [`kislerdm/neon`](https://registry.terraform.io/providers/kislerdm/neon/latest/docs).
+
+### Pré-requisitos
+
+- [Terraform](https://developer.hashicorp.com/terraform/install) >= 1.14
+- Conta na Neon + API key (*Account Settings → API Keys*) e Organization ID (*Account Settings → Organization settings*)
+
+### Provisionar o banco
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# edite terraform.tfvars com sua API key e org_id reais (nunca commitar esse arquivo)
+
+terraform init
+terraform plan
+terraform apply
+```
+
+### Obter os dados de conexão
+
+```bash
+terraform output -raw database_host
+terraform output -raw database_name
+terraform output -raw database_user
+terraform output -raw database_password
+```
+
+Use esses valores para preencher o `.env` (ver [Opção B](#opção-b--banco-neon-produção) acima).
+
+### O que é provisionado
+
+- Projeto Neon na região `aws-sa-east-1` (São Paulo), plano free.
+- Branch/database/role padrão, criados junto com o projeto.
+- Connection URIs (direta e via pooler/PgBouncer) expostas como outputs sensíveis.
+
+> O `terraform.tfstate` guarda credenciais em texto plano, não é commitado (ver `terraform/.gitignore`). Para uso além de portfólio individual (time, CI automatizado), o recomendado é migrar para um backend remoto de state.
+
+### Schema do banco
+
+O Hibernate **não** gerencia o schema (`ddl-auto: none`) o banco provisionado pela Neon nasce vazio. As tabelas (`tb_clients`, `tb_contacts`) precisam ser criadas manualmente antes do primeiro uso.
+
 ## Testes
 
 O projeto tem duas camadas de teste:
 
-- **Unitários** (JUnit + Mockito): domínio, validators e services, com dependências mockadas — rápidos e isolados de infraestrutura.
+- **Unitários** (JUnit + Mockito): domínio, validators e services, com dependências mockadas são rápidos e isolados de infraestrutura.
 - **Integração** (JUnit + Testcontainers): repositories, services e o fluxo HTTP completo, rodando contra um PostgreSQL real em container. Usam `PostgresIntegrationTest` como classe base, com um container Postgres compartilhado entre as classes da suíte.
 
 ```bash
 ./mvnw test
 ```
 
-> Os testes de integração exigem Docker disponível na máquina/CI — o Testcontainers sobe e derruba o container automaticamente.
+> Os testes de integração exigem Docker disponível na máquina/CI, o Testcontainers sobe e derruba o container automaticamente.
 
 ## CI
 
@@ -158,6 +236,7 @@ Todo push/PR para `main` e `develop` roda o pipeline definido em `.github/workfl
 
 - **`open-in-view: false`**: desabilitado deliberadamente (é considerado anti-pattern manter a sessão do Hibernate aberta até a serialização da view). Por isso, todo acesso a coleções lazy (`Client.contacts`) acontece dentro de métodos `@Transactional` explícitos na camada de serviço.
 - **`ddl-auto: none`** em produção: o schema não é gerenciado pelo Hibernate; no perfil de teste (`application-test.yaml`) usa-se `create-drop`, já que cada execução parte de um container novo.
+- **`sslmode=require`** na `datasource.url`: a Neon exige SSL em todas as conexões. O mesmo `application.yaml` funciona tanto para o Postgres local (Docker) quanto para a Neon, sem necessidade de perfis separados.
 
 ## Licença
 
