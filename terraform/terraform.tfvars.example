@@ -1,0 +1,11 @@
+# Copie este arquivo para terraform.tfvars e preencha com seus valores reais.
+# NUNCA commite o terraform.tfvars (já está no .gitignore).
+
+neon_api_key = "sua-api-key-aqui"
+neon_org_id  = "org-xxxxxxxx"
+
+# Opcionais — já têm default em variables.tf
+# project_name  = "nubank-challenge"
+# region_id     = "aws-sa-east-1"
+# database_name = "nubank_db"
+# role_name     = "nubank_app"
